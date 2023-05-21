@@ -17,8 +17,17 @@ const app = express();
 
 app.use(cors());
 app.use(helmet());
-app.use(bodyParser.json({ limit: "50mb" }));
+//app.use(bodyParser.json({ limit: "50mb" }));
 app.use(bodyParser.urlencoded({ limit: "50mb", extended: true }));
+
+app.use(
+  bodyParser.raw({
+    inflate: true,
+    limit: "100kb",
+    type: "application/octet-stream",
+  })
+);
+const jsonBodyParser = bodyParser.json({ limit: "50mb" });
 
 // Implement rate limiting
 const limiter = rateLimit({
@@ -62,9 +71,18 @@ const doctorSchema = new mongoose.Schema({
   email: String,
   password: String,
   description: String,
+  resetPasswordToken: String, // New field for password reset token
+  resetPasswordExpires: Date, // New field for token expiration date
   profilePhoto: String,
   isVerified: { type: Boolean, default: false },
   doctor: { type: Boolean, default: true },
+  balance: { type: Number, default: 0 },
+  busy: [
+    {
+      start: String,
+      end: String,
+    },
+  ],
   verificationToken: String,
   helpOptions: [],
   languageOptions: [],
@@ -73,6 +91,14 @@ const doctorSchema = new mongoose.Schema({
     30: { type: Number, default: 0 },
     45: { type: Number, default: 0 },
     60: { type: Number, default: 0 },
+  },
+  workdayHours: {
+    from: { type: Number, default: 0 },
+    to: { type: Number, default: 0 },
+  },
+  weekendHours: {
+    from: { type: Number, default: 0 },
+    to: { type: Number, default: 0 },
   },
   averageRating: {
     type: Number,
@@ -90,6 +116,7 @@ const doctorSchema = new mongoose.Schema({
       doctorFullName: String,
       appointmentUrl: String,
       meetingId: String,
+      price: Number,
     },
   ],
 });
@@ -101,6 +128,8 @@ const userSchema = new mongoose.Schema({
   email: String,
   password: String,
   description: String,
+  resetPasswordToken: String, // New field for password reset token
+  resetPasswordExpires: Date, // New field for token expiration date
   profilePhoto: String,
   isVerified: { type: Boolean, default: false },
   verificationToken: String,
@@ -202,7 +231,7 @@ app.get("/sortedDoctors", async (req, res) => {
     const doctors = await Doctor.find(filterCriteria)
       .sort(sortCriteria)
       .select(
-        "userId name lastname profilePhoto helpOptions languageOptions rates"
+        "userId name lastname profilePhoto helpOptions languageOptions rates averageRating"
       )
       .limit(30);
 
@@ -211,7 +240,7 @@ app.get("/sortedDoctors", async (req, res) => {
     res.status(400).json({ error: error.message });
   }
 });
-app.post("/rateDoctor", authenticateToken, async (req, res) => {
+app.post("/rateDoctor", jsonBodyParser, authenticateToken, async (req, res) => {
   const token = req.headers["authorization"].split(" ")[1];
   const { doctorId, rating, appointmentId } = req.body;
 
@@ -283,13 +312,16 @@ app.get("/appointmentsMade", authenticateToken, async (req, res) => {
       return res.status(404).json({ error: "User not found" });
     }
 
-    const appointmentsMade = user.appointmentsMade;
+    const appointmentsMade = user.appointmentsMade.sort((a, b) =>
+      a.start.localeCompare(b.start)
+    );
 
     res.status(200).json({ appointmentsMade });
   } catch (error) {
     res.status(400).json({ error: error.message });
   }
 });
+
 function authenticateToken(req, res, next) {
   const authHeader = req.headers["authorization"];
   const token = authHeader && authHeader.split(" ")[1];
@@ -336,7 +368,7 @@ app.get("/appointments/:userId", async (req, res) => {
       });
     }
 
-    res.status(200).json({ appointments });
+    res.status(200).json({ appointments: appointments, busy: user.busy });
   } catch (error) {
     res.status(400).json({ error: error.message });
   }
@@ -378,6 +410,104 @@ async function sendAppointmentEmails(userEmail, patientEmail, appointment) {
   await transporter.sendMail(userMailOptions);
   await transporter.sendMail(patientMailOptions);
 }
+app.delete(
+  "/appointmentsCancelforDoctor/:appointmentId/:cancellationReason",
+  authenticateToken,
+  async (req, res) => {
+    const token = req.headers["authorization"].split(" ")[1];
+
+    if (isTokenExpired(token)) {
+      return res.status(401).json({ error: "Token expired" });
+    }
+
+    const doctorId = await getUserIdFromToken(token);
+    const appointmentId = req.params.appointmentId;
+    const cancellationReason = req.params.cancellationReason;
+
+    try {
+      const doctor = await Doctor.findOne({ userId: doctorId });
+
+      if (!doctor) {
+        return res.status(404).json({ error: "Doctor not found" });
+      }
+
+      const appointmentIndex = doctor.appointments.findIndex(
+        (appointment) => appointment.appointmentId.toString() === appointmentId
+      );
+
+      if (appointmentIndex === -1) {
+        return res.status(404).json({ error: "Appointment not found" });
+      }
+
+      const appointment = doctor.appointments[appointmentIndex];
+
+      // Cancel whereby meeting
+      // Generate a new whereby.dev meeting and include the link in the appointment object
+      await axios.delete(
+        "https://api.whereby.dev/v1/meetings/" + appointment.meetingId,
+        {
+          headers: {
+            Authorization: `Bearer ${process.env.WHEREBY_API_KEY}`,
+          },
+        }
+      );
+
+      // Remove appointment from doctor's appointments array
+      doctor.appointments.splice(appointmentIndex, 1);
+      await doctor.save();
+
+      // Get the user associated with the appointment
+      const user = await User.findOne({ userId: appointment.patientId });
+
+      if (!user) {
+        return res.status(404).json({ error: "User not found" });
+      }
+
+      // Remove appointment from user's appointmentsMade array
+      const userAppointmentIndex = user.appointmentsMade.findIndex(
+        (appointment) =>
+          appointment.appointmentId.toString() === appointmentId.toString()
+      );
+
+      if (userAppointmentIndex !== -1) {
+        user.appointmentsMade.splice(userAppointmentIndex, 1);
+        await user.save();
+      }
+
+      // Send cancellation email to the user
+      await sendCancellationEmail(user.email, cancellationReason);
+
+      res.status(200).json({ message: "Appointment cancelled successfully" });
+    } catch (error) {
+      console.error(error);
+      res.status(400).json({ error: "Failed to cancel appointment" });
+    }
+  }
+);
+
+async function sendCancellationEmail(email, reason) {
+  const transporter = nodemailer.createTransport({
+    service: "gmail",
+    auth: {
+      user: process.env.EMAIL_USER,
+      pass: process.env.EMAIL_PASS,
+    },
+  });
+
+  const mailOptions = {
+    from: process.env.EMAIL_USER,
+    to: email,
+    subject: "Appointment Cancellation",
+    html: `
+      <h3>Appointment Cancellation</h3>
+      <p>Your appointment has been cancelled by the doctor.</p>
+      <p>Reason: ${reason}</p>
+    `,
+  };
+
+  await transporter.sendMail(mailOptions);
+}
+
 app.delete(
   "/appointmentsCancel/:userId/:appointmentId",
   authenticateToken,
@@ -441,66 +571,67 @@ app.delete(
   }
 );
 
-async function createAppointment(userId, doctorId, start, end, notes) {
-  try {
-    const doctor = await Doctor.findOne({ userId: doctorId });
-    if (!doctor) {
-      return res.status(404).json({ error: "User not found" });
-    }
-    // Generate a new whereby.dev meeting and include the link in the appointment object
-    const wherebyMeeting = await axios.post(
-      "https://api.whereby.dev/v1/meetings",
-      {
-        title: "Appointment with ",
-        endDate: end,
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${process.env.WHEREBY_API_KEY}`,
-        },
-      }
-    );
-    const appointmentId = generateRandomId();
-    const newAppointment = {
-      appointmentId: appointmentId,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-      notes: notes,
-      start: start,
-      end: end,
-      patientId: doctorId,
-      appointmentUrl: wherebyMeeting.data.roomUrl,
-      meetingId: wherebyMeeting.data.meetingId,
-    };
-
-    doctor.appointments.push(newAppointment);
-    await doctor.save();
-    const patient = await User.findOne({ userId: patientId });
-    const newAppointmentPatient = {
-      appointmentId: appointmentId,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-      notes: notes,
-      start: start,
-      end: end,
-      doctorId: doctorId,
-      doctorFullName: `${doctor.name} ${doctor.lastname}`,
-      appointmentUrl: wherebyMeeting.data.roomUrl,
-      meetingId: wherebyMeeting.data.meetingId,
-    };
-    patient.appointmentsMade.push(newAppointmentPatient);
-    await patient.save();
-    if (patient) {
-      await sendAppointmentEmails(doctor.email, patient.email, newAppointment);
-    }
-
-    res.status(200).json({ message: "Appointment created successfully" });
-  } catch (error) {
-    res.status(400).json({ error: error.message });
+async function createAppointment(userId, doctorId, start, end, notes, value) {
+  const doctor = await Doctor.findOne({ userId: doctorId });
+  if (!doctor) {
+    return res.status(404).json({ error: "Doctor not found" });
   }
+  const patient = await User.findOne({ userId: userId });
+  if (!patient) {
+    return res.status(404).json({ error: "Patient not found" });
+  }
+  // Generate a new whereby.dev meeting and include the link in the appointment object
+  const wherebyMeeting = await axios.post(
+    "https://api.whereby.dev/v1/meetings",
+    {
+      title: "Appointment with ",
+      endDate: end,
+    },
+    {
+      headers: {
+        Authorization: `Bearer ${process.env.WHEREBY_API_KEY}`,
+      },
+    }
+  );
+  const appointmentId = generateRandomId();
+  const newAppointment = {
+    appointmentId: appointmentId,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    notes: notes,
+    start: start,
+    end: end,
+    patientId: userId,
+    appointmentUrl: wherebyMeeting.data.roomUrl,
+    meetingId: wherebyMeeting.data.meetingId,
+    price: value,
+  };
+
+  doctor.appointments.push(newAppointment);
+  await doctor.save();
+
+  const newAppointmentPatient = {
+    appointmentId: appointmentId,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    notes: notes,
+    start: start,
+    end: end,
+    doctorId: doctorId,
+    doctorFullName: `${doctor.name} ${doctor.lastname}`,
+    appointmentUrl: wherebyMeeting.data.roomUrl,
+    meetingId: wherebyMeeting.data.meetingId,
+  };
+  patient.appointmentsMade.push(newAppointmentPatient);
+  await patient.save();
+  if (patient) {
+    await sendAppointmentEmails(doctor.email, patient.email, newAppointment);
+  }
+
+  return "Appointment created successfully";
 }
 
-app.put("/edit", authenticateToken, async (req, res) => {
+app.put("/edit", jsonBodyParser, authenticateToken, async (req, res) => {
   const token = req.headers["authorization"].split(" ")[1];
 
   if (isTokenExpired(token)) {
@@ -516,6 +647,8 @@ app.put("/edit", authenticateToken, async (req, res) => {
     helpOptions,
     languageOptions,
     rates,
+    weekendHours,
+    workdayHours,
   } = req.body;
 
   try {
@@ -538,11 +671,13 @@ app.put("/edit", authenticateToken, async (req, res) => {
     if (helpOptions) targetUser.helpOptions = helpOptions;
     if (languageOptions) targetUser.languageOptions = languageOptions;
     if (rates) targetUser.rates = rates;
+    if (weekendHours) targetUser.weekendHours = weekendHours;
+    if (workdayHours) targetUser.workdayHours = workdayHours;
     await targetUser.save();
 
-    res.status(200).json({ message: "User updated successfully" });
+    return res.status(200).json({ message: "Sėkmingai Atnaujinta" });
   } catch (error) {
-    res.status(400).json({ error: error.message });
+    return res.status(400).json({ error: error.message });
   }
 });
 
@@ -553,6 +688,22 @@ const buildResponse = (user, fields) => {
   });
   return responseObject;
 };
+app.post("/busy", jsonBodyParser, authenticateToken, async (req, res) => {
+  const token = req.headers["authorization"].split(" ")[1];
+
+  if (isTokenExpired(token)) {
+    return res.status(401).json({ error: "Token expired" });
+  }
+
+  const userId = await getUserIdFromToken(token);
+  const doctor = await Doctor.findOne({ userId });
+  if (!doctor) {
+    return res.status(404).json({ error: "User not found" });
+  }
+  doctor.busy.push({ start: req.body.start, end: req.body.end });
+  await doctor.save();
+  return res.status(200).json({ status: "success" });
+});
 app.get("/doctors", async (req, res) => {
   const doctors = await Doctor.find(
     { userId: "3329411c059f38b79abfe321" },
@@ -563,12 +714,13 @@ app.get("/doctors", async (req, res) => {
       profilePhoto: 1,
       helpOptions: 1,
       rates: 1,
+      averageRating: 1,
     }
   ).limit(30);
   return res.status(200).json({ doctors });
 });
 
-app.get("/user/:userId?", async (req, res) => {
+app.get("/user/:userId?", jsonBodyParser, async (req, res) => {
   const { userId } = req.params;
   var requestedUserId = userId;
   if (!requestedUserId) {
@@ -603,6 +755,8 @@ app.get("/user/:userId?", async (req, res) => {
         "languageOptions",
         "rates",
         "averageRating",
+        "weekendHours",
+        "workdayHours",
       ];
 
       res.status(200).json(buildResponse(targetUser, responseFields));
@@ -693,20 +847,114 @@ app.post("/register", async (req, res) => {
     res.status(400).json({ error: error.message });
   }
 });
+app.post("/forgotPassword", jsonBodyParser, async (req, res) => {
+  const { email } = req.body;
 
-app.post("/login", async (req, res) => {
+  try {
+    // Check if the user exists in the database
+    var user = await User.findOne({ email: email });
+
+    if (!user) {
+      user = await Doctor.findOne({ email: email });
+      if (!user) {
+        return res.status(404).json({ error: "User not found" });
+      }
+    }
+
+    // Generate a password reset token
+    const resetToken = crypto.randomBytes(20).toString("hex");
+    user.resetPasswordToken = resetToken;
+    user.resetPasswordExpires = Date.now() + 3600000; // Token expires in 1 hour
+
+    // Save the updated user document
+    await user.save();
+
+    // Send an email with the password reset instructions
+    const resetLink = `${process.env.WEB_URL}/resetPassword/${resetToken}`;
+    await sendPasswordResetEmail(email, resetLink);
+
+    res.status(200).json({ message: "Patvirtinimo laiškas išsiūstas" });
+  } catch (error) {
+    res.status(500).json({ error: "Failed to send password reset email" });
+  }
+});
+async function sendPasswordResetEmail(email, resetLink) {
+  const transporter = nodemailer.createTransport({
+    service: "gmail",
+    auth: {
+      user: process.env.EMAIL_USER,
+      pass: process.env.EMAIL_PASS,
+    },
+  });
+
+  const mailOptions = {
+    from: process.env.EMAIL_USER,
+    to: email,
+    subject: "Password Reset",
+    html: `
+      <h3>Password Reset</h3>
+      <p>You have requested to reset your password.</p>
+      <p>Please click the following link to reset your password:</p>
+      <a href="${resetLink}">Reset Password</a>
+    `,
+  };
+
+  await transporter.sendMail(mailOptions);
+}
+app.post("/resetPassword/:token", jsonBodyParser, async (req, res) => {
+  const { token } = req.params;
+  const { password } = req.body;
+
+  try {
+    // Find the user with the provided reset token
+    var user = await User.findOne({
+      resetPasswordToken: token,
+      resetPasswordExpires: { $gt: Date.now() },
+    });
+
+    if (!user) {
+      user = await Doctor.findOne({
+        resetPasswordToken: token,
+        resetPasswordExpires: { $gt: Date.now() },
+      });
+      if (!user) {
+        return res
+          .status(400)
+          .json({ error: "Neteisingas arba pasibaigęs prieigos raktas" });
+      }
+    }
+
+    // Update the user's password
+    user.password = bcrypt.hashSync(password, 10);
+    user.resetPasswordToken = undefined;
+    user.resetPasswordExpires = undefined;
+
+    // Save the updated user document
+    await user.save();
+
+    res.status(200).json({ message: "Slaptažodis pakeistas sėkmingai" });
+  } catch (error) {
+    res.status(500).json({ error: "Failed to reset password" });
+  }
+});
+
+app.post("/login", jsonBodyParser, async (req, res) => {
   const { email, password } = req.body;
   try {
-    var user = await User.findOne({ email });
+    var user = await User.findOne({ email: email });
     if (!user) {
-      user = await Doctor.findOne({ email });
+      user = await Doctor.findOne({ email: email });
     }
     if (!user) {
-      return res.status(401).json({ error: "Invalid email or password" });
+      return res
+        .status(401)
+        .json({ error: "Neteisingas el. pašto adresas arba slaptažodis" });
     }
     const isPasswordMatch = bcrypt.compare(password, user.password);
     if (!isPasswordMatch) {
-      return res.status(401).json({ error: "Invalid email or password" });
+      return res
+        .status(401)
+        .json({ error: "Neteisingas el. pašto adresas arba slaptažodis" });
     }
     const { name, lastname } = user;
     const token = jwt.sign({ email }, process.env.JWT_SECRET, {
@@ -749,15 +997,22 @@ app.get("/verify/:token", async (req, res) => {
 const stripe = new Stripe(
   "sk_test_51N3IVhHZicVIiEMtfR1x2qhvlC47uKwad1yUlrz3stzlGc8gWzy0j5eSmjaMC1YKc0tKd7yjF1k9cT5DdWZYzeeJ00gAcrPZED"
 );
+
 app.post(
   "/webhook",
   bodyParser.raw({ type: "application/json" }),
   (req, res) => {
     const sig = req.headers["stripe-signature"];
+    console.log("Signature:", sig); // Log the signature
+
     let event;
 
     try {
-      event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
+      event = stripe.webhooks.constructEvent(
+        req.body,
+        sig,
+        process.env.WEBHOOK_SECRET
+      );
     } catch (err) {
       res.status(400).send(`Webhook Error: ${err.message}`);
       return;
@@ -767,57 +1022,89 @@ app.post(
       const session = event.data.object;
       if (session.payment_status === "paid") {
         // Extract appointment details from the metadata
-        const { userId, doctorId, start, end, notes } = session.metadata;
+        const { userId, doctorId, start, end, notes, value } = session.metadata;
 
         // Call the createAppointment function with the extracted details
-        createAppointment(userId, doctorId, start, end, notes);
+        createAppointment(userId, doctorId, start, end, notes, value);
       }
     }
 
     res.status(200).send("Webhook received");
   }
 );
-
-app.post("/create-checkout-session", async (req, res) => {
+app.post("/create-checkout-session", jsonBodyParser, async (req, res) => {
   // Extract appointment details from the request
   const { userId, doctorId, start, end, notes } = req.body;
 
-  try {
-    const session = await stripe.checkout.sessions.create({
-      payment_method_types: ["card"],
-      line_items: [
-        {
-          price_data: {
-            currency: "eur",
-            product_data: {
-              name: "Appointment",
-            },
-            unit_amount: 500, // 5 EUR
-          },
-          quantity: 1,
-        },
-      ],
-      mode: "payment",
-      success_url: `${domainURL}/success`,
-      cancel_url: `${domainURL}/cancel`,
-      locale: "lt",
-      metadata: {
-        userId,
-        doctorId,
-        start,
-        end,
-        notes,
-      },
-    });
+  // Find the doctor in the database
+  const doctor = await mongoose.model("Doctor").findOne({ userId: doctorId });
 
-    res.send({
-      sessionId: session.id,
-    });
-  } catch (err) {
-    res.status(500).send({
-      error: "An error occurred while creating the session",
-    });
+  if (!doctor) {
+    res.status(404).send({ error: "Doctor not found" });
+    return;
   }
+
+  // Parse start and end times into date objects
+  const startDateTime = new Date(start);
+  const endDateTime = new Date(end);
+
+  // Calculate the duration in minutes
+  const duration = (endDateTime - startDateTime) / (1000 * 60);
+
+  // Determine the cost based on the duration and doctor's rates
+  let cost = 0;
+  if (duration <= 15) {
+    cost = doctor.rates["15"];
+  } else if (duration <= 30) {
+    cost = doctor.rates["30"];
+  } else if (duration <= 45) {
+    cost = doctor.rates["45"];
+  } else {
+    const hours = Math.floor(duration / 60);
+    const minutes = duration % 60;
+    cost = hours * doctor.rates["60"];
+    if (minutes > 0) {
+      if (minutes <= 15) {
+        cost += doctor.rates["15"];
+      } else if (minutes <= 30) {
+        cost += doctor.rates["30"];
+      } else {
+        cost += doctor.rates["45"];
+      }
+    }
+  }
+  // Create a new Stripe Checkout session with the calculated cost
+  const session = await stripe.checkout.sessions.create({
+    payment_method_types: ["card"],
+    line_items: [
+      {
+        price_data: {
+          currency: "eur",
+          product_data: {
+            name: "Appointment",
+          },
+          unit_amount: cost * 100, // Convert to cents for Stripe
+        },
+        quantity: 1,
+      },
+    ],
+    mode: "payment",
+    success_url: `${process.env.WEB_URL}/successPay`,
+    cancel_url: `${process.env.WEB_URL}/cancelPay`,
+    locale: "lt",
+    metadata: {
+      userId,
+      doctorId,
+      start,
+      end,
+      notes,
+      value: cost,
+    },
+  });
+
+  res.send({
+    sessionId: session.id,
+  });
 });
 
 async function sendVerificationEmail(email, token) {
