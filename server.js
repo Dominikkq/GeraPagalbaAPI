@@ -15,10 +15,9 @@ const fs = require("fs");
 const https = require("https");
 const cors = require("cors");
 
-app.use(cors());
 dotenv.config();
 const app = express();
-
+app.use(cors());
 app.use(helmet());
 //app.use(bodyParser.json({ limit: "50mb" }));
 app.use(bodyParser.urlencoded({ limit: "50mb", extended: true }));
