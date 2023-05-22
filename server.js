@@ -13,7 +13,9 @@ const axios = require("axios");
 const Stripe = require("stripe");
 const fs = require("fs");
 const https = require("https");
+const cors = require("cors");
 
+app.use(cors());
 dotenv.config();
 const app = express();
 
