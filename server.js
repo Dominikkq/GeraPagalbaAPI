@@ -844,6 +844,7 @@ app.post("/register", async (req, res) => {
         expiresIn: "1h",
       }
     );
+    console.log(email);
     sendVerificationEmail(email, token);
     res.status(200).json({ token, userId: savedUser.userId });
   } catch (error) {
