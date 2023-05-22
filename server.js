@@ -1130,12 +1130,13 @@ async function sendVerificationEmail(email, token) {
   await transporter.sendMail(mailOptions);
 }
 const httpsOptions = {
-  key: fs.readFileSync("./server.key"),
-  cert: fs.readFileSync("./server.crt"),
+  key: fs.readFileSync("./private.key"),
+  cert: fs.readFileSync("./certificate.crt"),
+  ca: fs.readFileSync("./ca_bundle.crt"),
 };
 
 const server = https.createServer(httpsOptions, app);
-const port = 5000;
-server.listen(port, () => {
+const port = 3000;
+server.listen(port, "127.0.0.1", () => {
   console.log(`Server running on port ${port}`);
 });
