@@ -791,7 +791,7 @@ function generateRandomId() {
   const buffer = crypto.randomBytes(12);
   return buffer.toString("hex");
 }
-app.post("/register", async (req, res) => {
+app.post("/register", jsonBodyParser, async (req, res) => {
   const { name, lastname, email, password, doctor } = req.body;
   let user;
   if (doctor) {
