@@ -3,7 +3,7 @@ const mongoose = require("mongoose");
 
 const bodyParser = require("body-parser");
 const dotenv = require("dotenv");
-const nodemailer = require("nodemailer");
+
 const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
 const rateLimit = require("express-rate-limit");
@@ -14,7 +14,7 @@ const Stripe = require("stripe");
 const fs = require("fs");
 const https = require("https");
 const cors = require("cors");
-
+import "./email.js";
 dotenv.config();
 const app = express();
 app.use(cors());
@@ -376,42 +376,6 @@ app.get("/appointments/:userId", async (req, res) => {
   }
 });
 
-async function sendAppointmentEmails(userEmail, patientEmail, appointment) {
-  const transporter = nodemailer.createTransport({
-    service: "gmail",
-    auth: {
-      user: process.env.EMAIL_USER,
-      pass: process.env.EMAIL_PASS,
-    },
-  });
-
-  const userMailOptions = {
-    from: process.env.EMAIL_USER,
-    to: userEmail,
-    subject: "New Appointment Registration",
-    html: `
-      <h3>New Appointment Registration</h3>
-      <p>You have successfully created a new appointment:</p>
-      <p>Date: ${appointment.start}</p>
-      <p>Notes: ${appointment.notes}</p>
-    `,
-  };
-
-  const patientMailOptions = {
-    from: process.env.EMAIL_USER,
-    to: patientEmail,
-    subject: "Appointment Reminder",
-    html: `
-      <h3>Appointment Reminder</h3>
-      <p>This is a reminder for your upcoming appointment:</p>
-      <p>Date: ${appointment.start}</p>
-      <p>Notes: ${appointment.notes}</p>
-    `,
-  };
-
-  await transporter.sendMail(userMailOptions);
-  await transporter.sendMail(patientMailOptions);
-}
 app.delete(
   "/appointmentsCancelforDoctor/:appointmentId/:cancellationReason",
   authenticateToken,
@@ -486,29 +450,6 @@ app.delete(
     }
   }
 );
-
-async function sendCancellationEmail(email, reason) {
-  const transporter = nodemailer.createTransport({
-    service: "gmail",
-    auth: {
-      user: process.env.EMAIL_USER,
-      pass: process.env.EMAIL_PASS,
-    },
-  });
-
-  const mailOptions = {
-    from: process.env.EMAIL_USER,
-    to: email,
-    subject: "Appointment Cancellation",
-    html: `
-      <h3>Appointment Cancellation</h3>
-      <p>Your appointment has been cancelled by the doctor.</p>
-      <p>Reason: ${reason}</p>
-    `,
-  };
-
-  await transporter.sendMail(mailOptions);
-}
 
 app.delete(
   "/appointmentsCancel/:userId/:appointmentId",
@@ -882,29 +823,7 @@ app.post("/forgotPassword", jsonBodyParser, async (req, res) => {
     res.status(500).json({ error: "Failed to send password reset email" });
   }
 });
-async function sendPasswordResetEmail(email, resetLink) {
-  const transporter = nodemailer.createTransport({
-    service: "gmail",
-    auth: {
-      user: process.env.EMAIL_USER,
-      pass: process.env.EMAIL_PASS,
-    },
-  });
 
-  const mailOptions = {
-    from: process.env.EMAIL_USER,
-    to: email,
-    subject: "Password Reset",
-    html: `
-      <h3>Password Reset</h3>
-      <p>You have requested to reset your password.</p>
-      <p>Please click the following link to reset your password:</p>
-      <a href="${resetLink}">Reset Password</a>
-    `,
-  };
-
-  await transporter.sendMail(mailOptions);
-}
 app.post("/resetPassword/:token", jsonBodyParser, async (req, res) => {
   const { token } = req.params;
   const { password } = req.body;
@@ -1110,28 +1029,7 @@ app.post("/create-checkout-session", jsonBodyParser, async (req, res) => {
     sessionId: session.id,
   });
 });
-async function sendVerificationEmail(email, token) {
-  const transporter = nodemailer.createTransport({
-    service: "gmail",
-    auth: {
-      user: process.env.EMAIL_USER,
-      pass: process.env.EMAIL_PASS,
-    },
-  });
 
-  const mailOptions = {
-    from: process.env.EMAIL_USER,
-    to: email,
-    subject: "Email Verification",
-    html: `
-      <h3>Verify your email</h3>
-      <p>Click the link below to verify your email:</p>
-      <a href="${process.env.CLIENT_URL}/verify/${token}">Verify Email</a>
-    `,
-  };
-
-  await transporter.sendMail(mailOptions);
-}
 const httpsOptions = {
   key: fs.readFileSync("./private.key"),
   cert: fs.readFileSync("./certificate.crt"),
