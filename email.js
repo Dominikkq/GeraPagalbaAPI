@@ -8,7 +8,7 @@ const transporter = nodemailer.createTransport({
   },
 });
 
-export async function sendPasswordResetEmail(email, resetLink) {
+const sendPasswordResetEmail = async (email, resetLink) => {
   const mailOptions = {
     from: process.env.EMAIL_USER,
     to: email,
@@ -22,12 +22,8 @@ export async function sendPasswordResetEmail(email, resetLink) {
   };
 
   await transporter.sendMail(mailOptions);
-}
-export async function sendAppointmentEmails(
-  userEmail,
-  patientEmail,
-  appointment
-) {
+};
+const sendAppointmentEmails = async (userEmail, patientEmail, appointment) => {
   const userMailOptions = {
     from: process.env.EMAIL_USER,
     to: userEmail,
@@ -54,8 +50,8 @@ export async function sendAppointmentEmails(
 
   await transporter.sendMail(userMailOptions);
   await transporter.sendMail(patientMailOptions);
-}
-export async function sendCancellationEmail(email, reason) {
+};
+const sendCancellationEmail = async (email, reason) => {
   const mailOptions = {
     from: process.env.EMAIL_USER,
     to: email,
@@ -68,8 +64,8 @@ export async function sendCancellationEmail(email, reason) {
   };
 
   await transporter.sendMail(mailOptions);
-}
-export async function sendVerificationEmail(email, token) {
+};
+const sendVerificationEmail = async (email, token) => {
   const mailOptions = {
     from: process.env.EMAIL_USER,
     to: email,
@@ -114,4 +110,4 @@ export async function sendVerificationEmail(email, token) {
   };
 
   await transporter.sendMail(mailOptions);
-}
+};
