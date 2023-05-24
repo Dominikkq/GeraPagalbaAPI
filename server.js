@@ -1,9 +1,3 @@
-import {
-  sendPasswordResetEmail,
-  sendAppointmentEmails,
-  sendCancellationEmail,
-  sendVerificationEmail,
-} from "./email.js";
 const express = require("express");
 const mongoose = require("mongoose");
 
@@ -20,7 +14,12 @@ const Stripe = require("stripe");
 const fs = require("fs");
 const https = require("https");
 const cors = require("cors");
+const emailModule = require("./email.js");
 
+const sendPasswordResetEmail = emailModule.sendPasswordResetEmail;
+const sendAppointmentEmails = emailModule.sendAppointmentEmails;
+const sendCancellationEmail = emailModule.sendCancellationEmail;
+const sendVerificationEmail = emailModule.sendVerificationEmail;
 dotenv.config();
 const app = express();
 app.use(cors());
