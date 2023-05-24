@@ -14,7 +14,12 @@ const Stripe = require("stripe");
 const fs = require("fs");
 const https = require("https");
 const cors = require("cors");
-import "./email.js";
+import {
+  sendPasswordResetEmail,
+  sendAppointmentEmails,
+  sendCancellationEmail,
+  sendVerificationEmail,
+} from "./email.js";
 dotenv.config();
 const app = express();
 app.use(cors());
