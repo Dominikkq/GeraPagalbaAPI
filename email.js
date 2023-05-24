@@ -111,3 +111,9 @@ const sendVerificationEmail = async (email, token) => {
 
   await transporter.sendMail(mailOptions);
 };
+module.exports = {
+  sendPasswordResetEmail,
+  sendAppointmentEmails,
+  sendCancellationEmail,
+  sendVerificationEmail,
+};
