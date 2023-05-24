@@ -1,5 +1,5 @@
 const nodemailer = require("nodemailer");
-import logo from "./logo.png";
+const logo = require("./logo.png");
 
 const transporter = nodemailer.createTransport({
   service: "gmail",
