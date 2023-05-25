@@ -1,14 +1,13 @@
 const nodemailer = require("nodemailer");
 
-const transporter = nodemailer.createTransport({
-  service: "gmail",
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS,
-  },
-});
-
 const sendPasswordResetEmail = async (email, resetLink) => {
+  const transporter = nodemailer.createTransport({
+    service: "gmail",
+    auth: {
+      user: process.env.EMAIL_USER,
+      pass: process.env.EMAIL_PASS,
+    },
+  });
   const mailOptions = {
     from: process.env.EMAIL_USER,
     to: email,
@@ -24,6 +23,13 @@ const sendPasswordResetEmail = async (email, resetLink) => {
   await transporter.sendMail(mailOptions);
 };
 const sendAppointmentEmails = async (userEmail, patientEmail, appointment) => {
+  const transporter = nodemailer.createTransport({
+    service: "gmail",
+    auth: {
+      user: process.env.EMAIL_USER,
+      pass: process.env.EMAIL_PASS,
+    },
+  });
   const userMailOptions = {
     from: process.env.EMAIL_USER,
     to: userEmail,
@@ -52,6 +58,13 @@ const sendAppointmentEmails = async (userEmail, patientEmail, appointment) => {
   await transporter.sendMail(patientMailOptions);
 };
 const sendCancellationEmail = async (email, reason) => {
+  const transporter = nodemailer.createTransport({
+    service: "gmail",
+    auth: {
+      user: process.env.EMAIL_USER,
+      pass: process.env.EMAIL_PASS,
+    },
+  });
   const mailOptions = {
     from: process.env.EMAIL_USER,
     to: email,
@@ -66,6 +79,13 @@ const sendCancellationEmail = async (email, reason) => {
   await transporter.sendMail(mailOptions);
 };
 const sendVerificationEmail = async (email, token) => {
+  const transporter = nodemailer.createTransport({
+    service: "gmail",
+    auth: {
+      user: process.env.EMAIL_USER,
+      pass: process.env.EMAIL_PASS,
+    },
+  });
   const mailOptions = {
     from: process.env.EMAIL_USER,
     to: email,
