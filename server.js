@@ -3,6 +3,7 @@ const mongoose = require("mongoose");
 
 const bodyParser = require("body-parser");
 const dotenv = require("dotenv");
+const Joi = require("joi");
 
 const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
@@ -26,7 +27,12 @@ app.use(cors());
 app.use(helmet());
 //app.use(bodyParser.json({ limit: "50mb" }));
 app.use(bodyParser.urlencoded({ limit: "50mb", extended: true }));
-
+const validationMessages = {
+  "string.base": "Reikšmė turi būti teksto tipo",
+  "string.empty": "Laukelis yra privalomas",
+  "string.email": "Neteisingas el. pašto formatas",
+  "string.min": "Slaptažodis turi turėti bent 6 simbolius",
+};
 app.use(
   bodyParser.raw({
     inflate: true,
@@ -738,59 +744,74 @@ function generateRandomId() {
   return buffer.toString("hex");
 }
 app.post("/register", jsonBodyParser, async (req, res) => {
-  const { name, lastname, email, password, doctor } = req.body;
-  let user;
-  if (doctor) {
-    user = new Doctor({
-      userId: generateRandomId(),
-      name,
-      lastname,
-      email,
-      password,
-      description: "",
-      profilePhoto: "",
-      isVerified: false,
-      doctor: true,
-      verificationToken: crypto.randomBytes(20).toString("hex"),
-      helpOptions: [],
-      languageOptions: [],
-      rates: {
-        15: 0,
-        30: 0,
-        45: 0,
-        60: 0,
-      },
-      averageRating: 0,
-      appointments: [],
-      appointmentsMade: [],
-    });
-  } else {
-    user = new User({
-      userId: generateRandomId(),
-      name,
-      lastname,
-      email,
-      password,
-      description: "",
-      profilePhoto: "",
-      isVerified: false,
-      doctor: false,
-      verificationToken: crypto.randomBytes(20).toString("hex"),
-      helpOptions: [],
-      appointments: [],
-      appointmentsMade: [],
-    });
+  const { name, lastname, email, password } = req.body;
+  // Validate input
+  const schema = Joi.object({
+    name: Joi.string()
+      .required()
+      .messages({
+        ...validationMessages,
+        "any.required": "Vardas yra privalomas",
+      }),
+    lastname: Joi.string()
+      .required()
+      .messages({
+        ...validationMessages,
+        "any.required": "Pavardė yra privaloma",
+      }),
+    email: Joi.string()
+      .email()
+      .required()
+      .messages({
+        ...validationMessages,
+        "any.required": "El. Paštas yra privalomas",
+      }),
+    password: Joi.string()
+      .min(6)
+      .required()
+      .messages({
+        ...validationMessages,
+        "any.required": "Slaptažodis yra privalomas",
+      }),
+  });
+  const { error } = schema.validate(req.body);
+  if (error) {
+    return res.status(400).json({ error: error.details[0].message });
   }
+  // Check if the user already exists
+  const existingUser = await User.findOne({ email });
+  if (existingUser) {
+    return res.status(409).json({ error: "Toks vartotojas jau egzistuoja" });
+  }
+  // Hash the password
+  const hashedPassword = await bcrypt.hash(password, 10);
+  let VerifyToken = crypto.randomBytes(20).toString("hex");
+
+  const user = new User({
+    userId: generateRandomId(),
+    name,
+    lastname,
+    email,
+    password: hashedPassword,
+    description: "",
+    profilePhoto: "",
+    isVerified: false,
+    doctor: false,
+    verificationToken: VerifyToken,
+    helpOptions: [],
+    appointments: [],
+    appointmentsMade: [],
+  });
   try {
     const savedUser = await user.save();
     const token = jwt.sign(
-      { userId: savedUser.userId },
+      { userId: savedUser.userId, verificationToken: VerifyToken },
       process.env.JWT_SECRET,
       {
         expiresIn: "1h",
       }
     );
-    console.log(email);
+
     sendVerificationEmail(email, token);
     res.status(200).json({ token, userId: savedUser.userId });
   } catch (error) {
@@ -868,28 +889,52 @@ app.post("/resetPassword/:token", jsonBodyParser, async (req, res) => {
 
 app.post("/login", jsonBodyParser, async (req, res) => {
   const { email, password } = req.body;
+
+  // Validate input
+  const schema = Joi.object({
+    email: Joi.string()
+      .email()
+      .required()
+      .messages({
+        ...validationMessages,
+      }),
+    password: Joi.string()
+      .min(6)
+      .required()
+      .messages({
+        ...validationMessages,
+      }),
+  });
+  const { error } = schema.validate(req.body);
+  if (error) {
+    return res.status(400).json({ error: error.details[0].message });
+  }
+
   try {
-    var user = await User.findOne({ email: email });
+    let user = await User.findOne({ email });
     if (!user) {
-      user = await Doctor.findOne({ email: email });
+      user = await Doctor.findOne({ email });
     }
+
     if (!user) {
       return res
         .status(401)
         .json({ error: "Neteisingas el. pašto adresas arba slaptažodis" });
     }
-    const isPasswordMatch = bcrypt.compare(password, user.password);
+    const isPasswordMatch = await bcrypt.compare(password, user.password);
     if (!isPasswordMatch) {
       return res
         .status(401)
         .json({ error: "Neteisingas el. pašto adresas arba slaptažodis" });
     }
+
     const { name, lastname } = user;
     const token = jwt.sign({ email }, process.env.JWT_SECRET, {
       expiresIn: "1d",
     });
     user.verificationToken = token;
     await user.save();
+
     res.status(200).json({ name, lastname, token });
   } catch (error) {
     res.status(400).json({ error: error.message });
@@ -899,25 +944,30 @@ app.post("/login", jsonBodyParser, async (req, res) => {
 app.get("/protected", authenticateToken, (req, res) => {
   res.status(200).json({ message: "Protected route" });
 });
-app.get("/verify/:token", async (req, res) => {
+app.get("/verify/:token", jsonBodyParser, async (req, res) => {
   const { token } = req.params;
 
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const user = await User.findOneAndUpdate(
+    var user = await User.findOneAndUpdate(
       {
-        email: decoded.email,
         userId: decoded.userId,
-        verificationToken: token,
       },
       { isVerified: true, verificationToken: null }
     );
-
     if (!user) {
-      return res.status(400).json({ error: "Invalid or expired token" });
-    }
+      user = await Doctor.findOneAndUpdate(
+        {
+          userId: decoded.userId,
+        },
+        { isVerified: true, verificationToken: null }
+      );
 
-    res.status(200).json({ message: "El. Paštas Patvirtintas" });
+      if (!user) {
+        return res.status(400).json({ error: "Invalid or expired token" });
+      }
+    }
+    res.redirect(`${process.env.WEB_URL}/prisijungimas#success`);
   } catch (error) {
     res.status(400).json({ error: error.message });
   }
@@ -931,7 +981,6 @@ app.post(
   bodyParser.raw({ type: "application/json" }),
   (req, res) => {
     const sig = req.headers["stripe-signature"];
-    console.log("Signature:", sig); // Log the signature
 
     let event;
 
@@ -1034,7 +1083,10 @@ app.post("/create-checkout-session", jsonBodyParser, async (req, res) => {
     sessionId: session.id,
   });
 });
+const PORT = 5000;
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 
+/*
 const httpsOptions = {
   key: fs.readFileSync("./private.key"),
   cert: fs.readFileSync("./certificate.crt"),
@@ -1046,3 +1098,4 @@ const port = 3000;
 server.listen(port, () => {
   console.log(`Server running on port ${port}`);
 });
+*/
