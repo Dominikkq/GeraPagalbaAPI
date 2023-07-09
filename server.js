@@ -55,6 +55,22 @@ mongoose.connect(process.env.MONGODB_URI, {
 });
 mongoose.connection.once("open", () => console.log("Connected to MongoDB"));
 
+const KeySchema = new mongoose.Schema({
+  key: {
+    type: String,
+    ref: "User",
+    required: true,
+  },
+  userId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "User",
+    default: null,
+  },
+  createdAt: {
+    type: Date,
+    default: Date.now,
+  },
+});
 const RatingSchema = new mongoose.Schema({
   doctorId: {
     type: mongoose.Schema.Types.ObjectId,
@@ -80,7 +96,6 @@ const RatingSchema = new mongoose.Schema({
 const doctorSchema = new mongoose.Schema({
   userId: String,
   name: String,
-  lastname: String,
   email: String,
   password: String,
   description: String,
@@ -99,6 +114,7 @@ const doctorSchema = new mongoose.Schema({
   verificationToken: String,
   helpOptions: [],
   languageOptions: [],
+  phoneNumber: String,
   rates: {
     15: { type: Number, default: 0 },
     30: { type: Number, default: 0 },
@@ -106,8 +122,8 @@ const doctorSchema = new mongoose.Schema({
     60: { type: Number, default: 0 },
   },
   workdayHours: {
-    from: { type: Number, default: 0 },
-    to: { type: Number, default: 0 },
+    from: { type: Number, default: 9 },
+    to: { type: Number, default: 17 },
   },
   weekendHours: {
     from: { type: Number, default: 0 },
@@ -137,7 +153,6 @@ const doctorSchema = new mongoose.Schema({
 const userSchema = new mongoose.Schema({
   userId: String,
   name: String,
-  lastname: String,
   email: String,
   password: String,
   description: String,
@@ -166,6 +181,8 @@ const userSchema = new mongoose.Schema({
 const Doctor = mongoose.model("Doctor", doctorSchema);
 const User = mongoose.model("User", userSchema);
 const Rating = mongoose.model("Rating", RatingSchema);
+const Keys = mongoose.model("Keys", KeySchema);
+
 function isTokenExpired(token) {
   const decoded = jwt.decode(token, { complete: true });
 
@@ -223,7 +240,11 @@ app.get("/sortedDoctors", async (req, res) => {
     return res.status(400).json({ error: "Invalid sort order" });
   }
 
-  const filterCriteria = { doctor: true };
+  const filterCriteria = {
+    doctor: true,
+    "workdayHours.from": { $ne: "0" },
+    "workdayHours.to": { $ne: "0" },
+  };
 
   if (languageOptions.length > 0) {
     filterCriteria["languageOptions"] = { $in: languageOptions };
@@ -244,7 +265,7 @@ app.get("/sortedDoctors", async (req, res) => {
     const doctors = await Doctor.find(filterCriteria)
       .sort(sortCriteria)
       .select(
-        "userId name lastname profilePhoto helpOptions languageOptions rates averageRating"
+        "userId name profilePhoto helpOptions languageOptions rates averageRating"
       )
       .limit(30);
 
@@ -253,6 +274,7 @@ app.get("/sortedDoctors", async (req, res) => {
     res.status(400).json({ error: error.message });
   }
 });
+
 app.post("/rateDoctor", jsonBodyParser, authenticateToken, async (req, res) => {
   const token = req.headers["authorization"].split(" ")[1];
   const { doctorId, rating, appointmentId } = req.body;
@@ -572,7 +594,6 @@ async function createAppointment(userId, doctorId, start, end, notes, value) {
     start: start,
     end: end,
     doctorId: doctorId,
-    doctorFullName: `${doctor.name} ${doctor.lastname}`,
     appointmentUrl: wherebyMeeting.data.roomUrl,
     meetingId: wherebyMeeting.data.meetingId,
   };
@@ -595,7 +616,6 @@ app.put("/edit", jsonBodyParser, authenticateToken, async (req, res) => {
   const userId = await getUserIdFromToken(token);
   const {
     name,
-    lastname,
     description,
     profilePhoto,
     helpOptions,
@@ -603,6 +623,7 @@ app.put("/edit", jsonBodyParser, authenticateToken, async (req, res) => {
     rates,
     weekendHours,
     workdayHours,
+    phoneNumber,
   } = req.body;
 
   try {
@@ -619,7 +640,6 @@ app.put("/edit", jsonBodyParser, authenticateToken, async (req, res) => {
     }
 
     if (name) targetUser.name = name;
-    if (lastname) targetUser.lastname = lastname;
     if (description) targetUser.description = description;
     if (profilePhoto) targetUser.profilePhoto = profilePhoto;
     if (helpOptions) targetUser.helpOptions = helpOptions;
@@ -627,6 +647,8 @@ app.put("/edit", jsonBodyParser, authenticateToken, async (req, res) => {
     if (rates) targetUser.rates = rates;
     if (weekendHours) targetUser.weekendHours = weekendHours;
     if (workdayHours) targetUser.workdayHours = workdayHours;
+    if (phoneNumber) targetUser.phoneNumber = phoneNumber;
+    console.log(targetUser);
     await targetUser.save();
 
     return res.status(200).json({ message: "Sėkmingai Atnaujinta" });
@@ -659,18 +681,15 @@ app.post("/busy", jsonBodyParser, authenticateToken, async (req, res) => {
   return res.status(200).json({ status: "success" });
 });
 app.get("/doctors", async (req, res) => {
-  const doctors = await Doctor.find(
-    { userId: "3329411c059f38b79abfe321" },
-    {
-      userId: 1,
-      name: 1,
-      lastname: 1,
-      profilePhoto: 1,
-      helpOptions: 1,
-      rates: 1,
-      averageRating: 1,
-    }
-  ).limit(30);
+  const doctors = await Doctor.find({
+    userId: { $exists: true },
+    name: { $exists: true },
+    profilePhoto: { $exists: true },
+    helpOptions: { $exists: true },
+    rates: { $exists: true },
+    averageRating: { $exists: true },
+  }).limit(30);
+
   return res.status(200).json({ doctors });
 });
 
@@ -701,7 +720,6 @@ app.get("/user/:userId?", jsonBodyParser, async (req, res) => {
       const responseFields = [
         "userId",
         "name",
-        "lastname",
         "description",
         "profilePhoto",
         "doctor",
@@ -711,6 +729,8 @@ app.get("/user/:userId?", jsonBodyParser, async (req, res) => {
         "averageRating",
         "weekendHours",
         "workdayHours",
+        "email",
+        "phoneNumber",
       ];
 
       res.status(200).json(buildResponse(targetUser, responseFields));
@@ -725,7 +745,6 @@ app.get("/user/:userId?", jsonBodyParser, async (req, res) => {
       const responseFields = [
         "userId",
         "name",
-        "lastname",
         "description",
         "profilePhoto",
         "helpOptions",
@@ -743,8 +762,32 @@ function generateRandomId() {
   const buffer = crypto.randomBytes(12);
   return buffer.toString("hex");
 }
+const generateRandomKey = () => {
+  const keyLength = 8; // Define the desired length of the key
+  const chars = "0123456789"; // Define the allowed characters for the key
+  let randomKey = "";
+
+  for (let i = 0; i < keyLength; i++) {
+    const randomIndex = Math.floor(Math.random() * chars.length);
+    randomKey += chars.charAt(randomIndex);
+  }
+
+  const key = new Keys({
+    key: randomKey,
+    userId: null,
+  });
+  key.save();
+  return randomKey;
+};
+
+app.post("/add/key", jsonBodyParser, async (req, res) => {
+  const key = generateRandomKey();
+  res
+    .status(200)
+    .json({ key: key, url: process.env.WEB_URL + "/registracija#" + key });
+});
 app.post("/register", jsonBodyParser, async (req, res) => {
-  const { name, lastname, email, password } = req.body;
+  const { name, email, password, doctor } = req.body;
   // Validate input
   const schema = Joi.object({
     name: Joi.string()
@@ -752,12 +795,6 @@ app.post("/register", jsonBodyParser, async (req, res) => {
       .messages({
         ...validationMessages,
         "any.required": "Vardas yra privalomas",
-      }),
-    lastname: Joi.string()
-      .required()
-      .messages({
-        ...validationMessages,
-        "any.required": "Pavardė yra privaloma",
       }),
     email: Joi.string()
       .email()
@@ -773,39 +810,77 @@ app.post("/register", jsonBodyParser, async (req, res) => {
         ...validationMessages,
         "any.required": "Slaptažodis yra privalomas",
       }),
+    doctor: Joi.string()
+      .allow(null)
+      .min(3)
+      .messages({
+        ...validationMessages,
+        "any.required": "Neteisingas kodas",
+      }),
   });
+  const randomUserID = generateRandomId();
   const { error } = schema.validate(req.body);
   if (error) {
     return res.status(400).json({ error: error.details[0].message });
   }
   // Check if the user already exists
-  const existingUser = await User.findOne({ email });
+  var existingUser = await User.findOne({ email });
   if (existingUser) {
-    return res.status(409).json({ error: "Toks vartotojas jau egzistuoja" });
+    existingUser = await Doctor.findOne({ email });
+    if (existingUser) {
+      return res.status(409).json({ error: "Toks vartotojas jau egzistuoja" });
+    }
   }
   // Hash the password
   const hashedPassword = await bcrypt.hash(password, 10);
   let VerifyToken = crypto.randomBytes(20).toString("hex");
 
-  const user = new User({
-    userId: generateRandomId(),
-    name,
-    lastname,
-    email,
-    password: hashedPassword,
-    description: "",
-    profilePhoto: "",
-    isVerified: false,
-    doctor: false,
-    verificationToken: VerifyToken,
-    helpOptions: [],
-    appointments: [],
-    appointmentsMade: [],
-  });
+  if (doctor) {
+    const key = await Keys.findOne({ key: doctor });
+
+    if (!key) {
+      return res.status(400).json({ error: "Invalid key" });
+    }
+
+    if (key.userId !== null) {
+      return res.status(400).json({ error: "Invalid key" });
+    }
+
+    key.userId = randomUserID;
+    await key.save();
+    await key.save();
+    const doctorUser = new Doctor({
+      userId: randomUserID,
+      name,
+      email,
+      password: hashedPassword,
+      description: "",
+      profilePhoto: "",
+      isVerified: false,
+      doctor: true,
+      verificationToken: VerifyToken,
+      helpOptions: [],
+      appointments: [],
+    });
+    await doctorUser.save();
+  } else {
+    const user = new User({
+      userId: randomUserID,
+      name,
+      email,
+      password: hashedPassword,
+      description: "",
+      profilePhoto: "",
+      isVerified: false,
+      doctor: false,
+      verificationToken: VerifyToken,
+      appointmentsMade: [],
+    });
+    await user.save();
+  }
   try {
-    const savedUser = await user.save();
     const token = jwt.sign(
-      { userId: savedUser.userId, verificationToken: VerifyToken },
+      { userId: randomUserID, verificationToken: VerifyToken },
       process.env.JWT_SECRET,
       {
         expiresIn: "1h",
@@ -813,7 +888,7 @@ app.post("/register", jsonBodyParser, async (req, res) => {
     );
 
     sendVerificationEmail(email, token);
-    res.status(200).json({ token, userId: savedUser.userId });
+    res.status(200).json({ token, userId: randomUserID });
   } catch (error) {
     res.status(400).json({ error: error.message });
   }
@@ -928,14 +1003,14 @@ app.post("/login", jsonBodyParser, async (req, res) => {
         .json({ error: "Neteisingas el. pašto adresas arba slaptažodis" });
     }
 
-    const { name, lastname } = user;
+    const { name } = user;
     const token = jwt.sign({ email }, process.env.JWT_SECRET, {
       expiresIn: "1d",
     });
     user.verificationToken = token;
     await user.save();
 
-    res.status(200).json({ name, lastname, token });
+    res.status(200).json({ name, token });
   } catch (error) {
     res.status(400).json({ error: error.message });
   }
