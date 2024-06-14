@@ -26,7 +26,7 @@ const app = express();
 app.use(cors());
 app.use(helmet());
 //app.use(bodyParser.json({ limit: "50mb" }));
-app.use(bodyParser.urlencoded({ limit: "50mb", extended: true }));
+app.use(bodyParser.urlencoded({ limit: "50mb", extended: false })); //BREAK
 const validationMessages = {
   "string.base": "Reikšmė turi būti teksto tipo",
   "string.empty": "Laukelis yra privalomas",
@@ -246,13 +246,10 @@ app.get("/sortedDoctors", async (req, res) => {
     "workdayHours.to": { $ne: "0" },
   };
 
-  if (languageOptions.length > 0) {
+  if (languageOptions.length > 0)
     filterCriteria["languageOptions"] = { $in: languageOptions };
-  }
-
-  if (helpOptions.length > 0) {
+  if (helpOptions.length > 0)
     filterCriteria["helpOptions"] = { $in: helpOptions };
-  }
 
   if (appointmentLength.length > 0 && price.length > 0) {
     filterCriteria[`rates.${appointmentLength[0]}`] = {
@@ -260,7 +257,6 @@ app.get("/sortedDoctors", async (req, res) => {
       $lt: price[1],
     };
   }
-
   try {
     const doctors = await Doctor.find(filterCriteria)
       .sort(sortCriteria)
@@ -376,19 +372,11 @@ function authenticateToken(req, res, next) {
 }
 app.get("/appointments/:userId", async (req, res) => {
   const token = req.headers["authorization"].split(" ")[1];
-
-  // Get userId from token
-
   const userId = req.params.userId;
-
   try {
     const user = await Doctor.findOne({ userId });
-
-    if (!user) {
-      return res.status(404).json({ error: "User not found" });
-    }
+    if (!user) return res.status(404).json({ error: "User not found" });
     var appointments = [];
-
     if (token && (await getUserIdFromToken(token)) == user.userId) {
       const tokenId = await getUserIdFromToken(token);
       if (tokenId == userId) {
@@ -402,7 +390,6 @@ app.get("/appointments/:userId", async (req, res) => {
         appointments.push({ start: appo.start, end: appo.end });
       });
     }
-
     res.status(200).json({ appointments: appointments, busy: user.busy });
   } catch (error) {
     res.status(400).json({ error: error.message });
@@ -414,32 +401,22 @@ app.delete(
   authenticateToken,
   async (req, res) => {
     const token = req.headers["authorization"].split(" ")[1];
-
-    if (isTokenExpired(token)) {
+    if (isTokenExpired(token))
       return res.status(401).json({ error: "Token expired" });
-    }
 
     const doctorId = await getUserIdFromToken(token);
     const appointmentId = req.params.appointmentId;
     const cancellationReason = req.params.cancellationReason;
-
     try {
       const doctor = await Doctor.findOne({ userId: doctorId });
-
-      if (!doctor) {
-        return res.status(404).json({ error: "Doctor not found" });
-      }
-
+      if (!doctor) return res.status(404).json({ error: "Doctor not found" });
       const appointmentIndex = doctor.appointments.findIndex(
         (appointment) => appointment.appointmentId.toString() === appointmentId
       );
-
       if (appointmentIndex === -1) {
         return res.status(404).json({ error: "Appointment not found" });
       }
-
       const appointment = doctor.appointments[appointmentIndex];
-
       // Cancel whereby meeting
       // Generate a new whereby.dev meeting and include the link in the appointment object
       await axios.delete(
@@ -450,32 +427,24 @@ app.delete(
           },
         }
       );
-
       // Remove appointment from doctor's appointments array
       doctor.appointments.splice(appointmentIndex, 1);
       await doctor.save();
-
       // Get the user associated with the appointment
       const user = await User.findOne({ userId: appointment.patientId });
-
-      if (!user) {
-        return res.status(404).json({ error: "User not found" });
-      }
+      if (!user) return res.status(404).json({ error: "User not found" });
 
       // Remove appointment from user's appointmentsMade array
       const userAppointmentIndex = user.appointmentsMade.findIndex(
         (appointment) =>
           appointment.appointmentId.toString() === appointmentId.toString()
       );
-
       if (userAppointmentIndex !== -1) {
         user.appointmentsMade.splice(userAppointmentIndex, 1);
         await user.save();
       }
-
       // Send cancellation email to the user
       await sendCancellationEmail(user.email, cancellationReason);
-
       res.status(200).json({ message: "Appointment cancelled successfully" });
     } catch (error) {
       console.error(error);
@@ -560,7 +529,7 @@ async function createAppointment(userId, doctorId, start, end, notes, value) {
   const wherebyMeeting = await axios.post(
     "https://api.whereby.dev/v1/meetings",
     {
-      title: "Appointment with ",
+      title: "Appointment",
       endDate: end,
     },
     {
@@ -731,6 +700,7 @@ app.get("/user/:userId?", jsonBodyParser, async (req, res) => {
         "workdayHours",
         "email",
         "phoneNumber",
+        "balance",
       ];
 
       res.status(200).json(buildResponse(targetUser, responseFields));
@@ -841,11 +811,6 @@ app.post("/register", jsonBodyParser, async (req, res) => {
     if (!key) {
       return res.status(400).json({ error: "Invalid key" });
     }
-
-    if (key.userId !== null) {
-      return res.status(400).json({ error: "Invalid key" });
-    }
-
     key.userId = randomUserID;
     await key.save();
     await key.save();
@@ -921,6 +886,7 @@ app.post("/forgotPassword", jsonBodyParser, async (req, res) => {
 
     res.status(200).json({ message: "Patvirtinimo laiškas išsiūstas" });
   } catch (error) {
+    console.log(error);
     res.status(500).json({ error: "Failed to send password reset email" });
   }
 });
@@ -1048,7 +1014,7 @@ app.get("/verify/:token", jsonBodyParser, async (req, res) => {
   }
 });
 const stripe = new Stripe(
-  "sk_test_51N3IVhHZicVIiEMtfR1x2qhvlC47uKwad1yUlrz3stzlGc8gWzy0j5eSmjaMC1YKc0tKd7yjF1k9cT5DdWZYzeeJ00gAcrPZED"
+  "sk_test_51PMC2t2MBAXhTOiLi1sBFRM7BqCxTF44slBg35g8K8JRuc2WVDUBv2cf3usnCKwzVHs1MnCrSeRMdGBOkdGcAxW300Aw01qOz8"
 );
 
 app.post(
@@ -1056,20 +1022,18 @@ app.post(
   bodyParser.raw({ type: "application/json" }),
   (req, res) => {
     const sig = req.headers["stripe-signature"];
-
     let event;
-
     try {
       event = stripe.webhooks.constructEvent(
         req.body,
         sig,
         process.env.WEBHOOK_SECRET
       );
+      console.log(event);
     } catch (err) {
       res.status(400).send(`Webhook Error: ${err.message}`);
       return;
     }
-
     if (event.type === "checkout.session.completed") {
       const session = event.data.object;
       if (session.payment_status === "paid") {
@@ -1077,6 +1041,8 @@ app.post(
         const { userId, doctorId, start, end, notes, value } = session.metadata;
 
         // Call the createAppointment function with the extracted details
+        console.log("creating appointment");
+        console.log(session.metadata);
         createAppointment(userId, doctorId, start, end, notes, value);
       }
     }
@@ -1157,6 +1123,23 @@ app.post("/create-checkout-session", jsonBodyParser, async (req, res) => {
   res.send({
     sessionId: session.id,
   });
+});
+
+var Message = mongoose.model("Message", { name: String, message: String });
+app.get("/messages", (req, res) => {
+  Message.find({}, (err, messages) => {
+    res.send(messages);
+  });
+});
+app.post("/messages", jsonBodyParser, (req, res) => {
+  var message = new Message(req.body);
+  message
+    .save()
+    .then(() => res.sendStatus(200))
+    .catch((err) => {
+      console.error(err);
+      res.status(500).send(err);
+    });
 });
 const PORT = 5000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));

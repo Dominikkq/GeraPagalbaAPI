@@ -1,4 +1,6 @@
 const nodemailer = require("nodemailer");
+const dotenv = require("dotenv");
+dotenv.config();
 
 const sendPasswordResetEmail = async (email, resetLink) => {
   const transporter = nodemailer.createTransport({
@@ -177,6 +179,7 @@ const sendCancellationEmail = async (email, reason) => {
   await transporter.sendMail(mailOptions);
 };
 const sendVerificationEmail = async (email, token) => {
+    console.log(process.env.EMAIL_USER, process.env.EMAIL_PASS)
   const transporter = nodemailer.createTransport({
     service: "gmail",
     auth: {
