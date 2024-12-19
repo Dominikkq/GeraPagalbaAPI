@@ -213,24 +213,34 @@ async function getUserIdFromToken(partialToken) {
     return null;
   }
 }
+
 app.get("/sortedDoctors", async (req, res) => {
   const { sortBy, order } = req.query;
   const sortCriteria = {};
-
+  console.log("CALLING SORTED DOCTORS");
   let languageOptions = [];
   let helpOptions = [];
   let appointmentLength = [];
   let price = [];
 
   if (sortBy) {
-    try {
-      const parsedSortBy = JSON.parse(sortBy);
-      languageOptions = parsedSortBy.languageOptions || [];
-      helpOptions = parsedSortBy.helpOptions || [];
-      appointmentLength = parsedSortBy.appointmentLength || [];
-      price = parsedSortBy.price || [];
-    } catch (error) {
-      return res.status(400).json({ error: "Invalid sort criteria" });
+    // Check if sortBy is an object (parsed by Express)
+    if (typeof sortBy === "object") {
+      languageOptions = sortBy.languageOptions || [];
+      helpOptions = sortBy.helpOptions || [];
+      appointmentLength = sortBy.appointmentLength || [];
+      price = sortBy.price || [];
+    } else {
+      try {
+        // Parse sortBy as JSON string
+        const parsedSortBy = JSON.parse(sortBy);
+        languageOptions = parsedSortBy.languageOptions || [];
+        helpOptions = parsedSortBy.helpOptions || [];
+        appointmentLength = parsedSortBy.appointmentLength || [];
+        price = parsedSortBy.price || [];
+      } catch (error) {
+        return res.status(400).json({ error: "Invalid sort criteria" });
+      }
     }
   }
 
@@ -1014,7 +1024,7 @@ app.get("/verify/:token", jsonBodyParser, async (req, res) => {
   }
 });
 const stripe = new Stripe(
-  "sk_test_51PMC2t2MBAXhTOiLi1sBFRM7BqCxTF44slBg35g8K8JRuc2WVDUBv2cf3usnCKwzVHs1MnCrSeRMdGBOkdGcAxW300Aw01qOz8"
+  "sk_test_51N3IVhHZicVIiEMtfR1x2qhvlC47uKwad1yUlrz3stzlGc8gWzy0j5eSmjaMC1YKc0tKd7yjF1k9cT5DdWZYzeeJ00gAcrPZED"
 );
 
 app.post(
